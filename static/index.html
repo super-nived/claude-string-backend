@@ -46,6 +46,13 @@
 
                 <div class="controls">
                     <div class="control-group">
+                        <label>Mode</label>
+                        <div class="mode-toggle">
+                            <button class="mode-btn active" id="modeBW" data-mode="bw">Black &amp; White</button>
+                            <button class="mode-btn" id="modeColor" data-mode="color">Color</button>
+                        </div>
+                    </div>
+                    <div class="control-group">
                         <label for="pinsInput">Number of Pins</label>
                         <input type="range" id="pinsRange" min="50" max="500" value="300" oninput="pinsInput.value=this.value">
                         <input type="number" id="pinsInput" min="50" max="500" value="300" oninput="pinsRange.value=this.value">
@@ -132,7 +139,10 @@
     (function() {
         // State
         let pinCoords = null;
-        let lineSequence = null;
+        let lineSequence = null;  // BW mode sequence
+        let colorLayers = null;   // Color mode layers [{color, line_sequence}, ...]
+        let mergedLines = null;   // Color mode: merged array of {from, to, color}
+        let currentMode = 'bw';   // 'bw' or 'color'
         let imgSize = 500;
         let animFrame = null;
         let animIndex = 0;
@@ -141,14 +151,15 @@
         let lastStepImageData = null;
         let listenForKeys = false;
         let selectedFile = null;
-        let originalImage = null; // HTMLImageElement of uploaded image
+        let originalImage = null;
+        let selectedMode = 'bw';
 
         // Crop state
         let cropActive = false;
         let cropStartX = 0, cropStartY = 0;
         let cropX = 0, cropY = 0, cropW = 0, cropH = 0;
         let isDragging = false;
-        let cropScale = 1; // ratio of displayed size to actual image size
+        let cropScale = 1;
 
         // DOM elements
         const imageInput = document.getElementById('imageInput');
@@ -176,22 +187,28 @@
         const stepInfo = document.getElementById('stepInfo');
         const currentPinLabel = document.getElementById('currentPinLabel');
         const nextPinLabel = document.getElementById('nextPinLabel');
-        const pinHighlight = document.getElementById('pinHighlight');
 
         const sequencePanel = document.getElementById('sequencePanel');
         const sequenceOutput = document.getElementById('sequenceOutput');
         const copyBtn = document.getElementById('copyBtn');
 
         const cropSection = document.getElementById('cropSection');
-        const cropContainer = document.getElementById('cropContainer');
         const cropCanvas = document.getElementById('cropCanvas');
         const cropCtx = cropCanvas.getContext('2d');
-        const cropOverlay = document.getElementById('cropOverlay');
         const cropBtn = document.getElementById('cropBtn');
         const cropResetBtn = document.getElementById('cropResetBtn');
 
-        const canvasScale = 2; // Draw at 2x for quality
-        const canvasSize = 1000; // 500 * 2
+        const canvasScale = 2;
+        const canvasSize = 1000;
+
+        // Mode toggle
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                selectedMode = btn.getAttribute('data-mode');
+            });
+        });
 
         // Upload handling
         uploadArea.addEventListener('click', () => imageInput.click());
@@ -205,14 +222,10 @@
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
-            if (e.dataTransfer.files.length) {
-                handleFile(e.dataTransfer.files[0]);
-            }
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
         });
         imageInput.addEventListener('change', () => {
-            if (imageInput.files.length) {
-                handleFile(imageInput.files[0]);
-            }
+            if (imageInput.files.length) handleFile(imageInput.files[0]);
         });
 
         function handleFile(file) {
@@ -227,54 +240,34 @@
             uploadPlaceholder.classList.add('hidden');
             generateBtn.disabled = false;
             statusText.textContent = '';
-
-            // Load image for crop tool
             originalImage = new Image();
-            originalImage.onload = function() {
-                initCropTool(originalImage);
-            };
+            originalImage.onload = function() { initCropTool(originalImage); };
             originalImage.src = url;
         }
 
         // --- Crop Tool ---
         function initCropTool(img) {
             cropSection.classList.remove('hidden');
-
-            // Fit image into the crop container (max 280px wide to fit settings panel)
-            const maxW = 280;
-            const maxH = 280;
-            let dispW = img.width;
-            let dispH = img.height;
+            const maxW = 280, maxH = 280;
+            let dispW = img.width, dispH = img.height;
             if (dispW > maxW) { dispH *= maxW / dispW; dispW = maxW; }
             if (dispH > maxH) { dispW *= maxH / dispH; dispH = maxH; }
-            dispW = Math.round(dispW);
-            dispH = Math.round(dispH);
-
-            cropCanvas.width = dispW;
-            cropCanvas.height = dispH;
-            cropCanvas.style.width = dispW + 'px';
-            cropCanvas.style.height = dispH + 'px';
+            dispW = Math.round(dispW); dispH = Math.round(dispH);
+            cropCanvas.width = dispW; cropCanvas.height = dispH;
+            cropCanvas.style.width = dispW + 'px'; cropCanvas.style.height = dispH + 'px';
             cropScale = img.width / dispW;
-
             cropCtx.drawImage(img, 0, 0, dispW, dispH);
-
-            // Default crop: full image
             cropX = 0; cropY = 0; cropW = dispW; cropH = dispH;
             cropActive = false;
             drawCropOverlay();
         }
 
         function drawCropOverlay() {
-            // Use a canvas overlay approach: redraw image then darken outside crop
             cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
             cropCtx.drawImage(originalImage, 0, 0, cropCanvas.width, cropCanvas.height);
-
             if (cropActive && cropW > 5 && cropH > 5) {
-                // Darken everything
                 cropCtx.fillStyle = 'rgba(0,0,0,0.5)';
                 cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
-
-                // Clear the crop region to show bright
                 cropCtx.save();
                 cropCtx.beginPath();
                 cropCtx.rect(cropX, cropY, cropW, cropH);
@@ -282,8 +275,6 @@
                 cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
                 cropCtx.drawImage(originalImage, 0, 0, cropCanvas.width, cropCanvas.height);
                 cropCtx.restore();
-
-                // Draw crop border
                 cropCtx.strokeStyle = '#1a73e8';
                 cropCtx.lineWidth = 2;
                 cropCtx.setLineDash([4, 4]);
@@ -294,68 +285,40 @@
 
         cropCanvas.addEventListener('mousedown', (e) => {
             const rect = cropCanvas.getBoundingClientRect();
-            cropStartX = e.clientX - rect.left;
-            cropStartY = e.clientY - rect.top;
-            isDragging = true;
-            cropActive = true;
+            cropStartX = e.clientX - rect.left; cropStartY = e.clientY - rect.top;
+            isDragging = true; cropActive = true;
         });
-
         cropCanvas.addEventListener('mousemove', (e) => {
             if (!isDragging) return;
             const rect = cropCanvas.getBoundingClientRect();
-            const mx = e.clientX - rect.left;
-            const my = e.clientY - rect.top;
-
-            // Calculate square crop region
-            let dx = mx - cropStartX;
-            let dy = my - cropStartY;
-            // Make it square based on the larger dimension
+            const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+            let dx = mx - cropStartX, dy = my - cropStartY;
             let size = Math.max(Math.abs(dx), Math.abs(dy));
             if (dx < 0) size = -size;
-            let sizeY = size;
-            if (dy < 0) sizeY = -sizeY;
-
+            let sizeY = size; if (dy < 0) sizeY = -sizeY;
             let x = cropStartX, y = cropStartY, w = size, h = sizeY;
-            // Normalize to positive width/height
             if (w < 0) { x += w; w = -w; }
             if (h < 0) { y += h; h = -h; }
-            // Make square
             let s = Math.min(w, h);
-            // Keep within bounds
             x = Math.max(0, Math.min(x, cropCanvas.width - s));
             y = Math.max(0, Math.min(y, cropCanvas.height - s));
             s = Math.min(s, cropCanvas.width - x, cropCanvas.height - y);
-
             cropX = x; cropY = y; cropW = s; cropH = s;
             drawCropOverlay();
         });
-
-        document.addEventListener('mouseup', () => {
-            isDragging = false;
-        });
+        document.addEventListener('mouseup', () => { isDragging = false; });
 
         cropBtn.addEventListener('click', () => {
             if (!originalImage || !cropActive || cropW < 10) {
-                statusText.textContent = 'Draw a crop region first.';
-                return;
+                statusText.textContent = 'Draw a crop region first.'; return;
             }
-            // Crop the original image using a temp canvas
-            const sx = Math.round(cropX * cropScale);
-            const sy = Math.round(cropY * cropScale);
-            const sw = Math.round(cropW * cropScale);
-            const sh = Math.round(cropH * cropScale);
-
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = sw;
-            tempCanvas.height = sh;
-            const tCtx = tempCanvas.getContext('2d');
-            tCtx.drawImage(originalImage, sx, sy, sw, sh, 0, 0, sw, sh);
-
-            // Update preview
-            previewImg.src = tempCanvas.toDataURL('image/png');
-
-            // Convert to blob and set as selectedFile
-            tempCanvas.toBlob((blob) => {
+            const sx = Math.round(cropX * cropScale), sy = Math.round(cropY * cropScale);
+            const sw = Math.round(cropW * cropScale), sh = Math.round(cropH * cropScale);
+            const tc = document.createElement('canvas');
+            tc.width = sw; tc.height = sh;
+            tc.getContext('2d').drawImage(originalImage, sx, sy, sw, sh, 0, 0, sw, sh);
+            previewImg.src = tc.toDataURL('image/png');
+            tc.toBlob((blob) => {
                 selectedFile = new File([blob], 'cropped.png', { type: 'image/png' });
                 statusText.textContent = 'Image cropped (' + sw + 'x' + sh + '). Ready to generate.';
             }, 'image/png');
@@ -366,24 +329,63 @@
             cropActive = false;
             cropX = 0; cropY = 0; cropW = cropCanvas.width; cropH = cropCanvas.height;
             drawCropOverlay();
-            // Reset selectedFile to original
-            const url = previewImg.src;
-            // Re-read original file
             selectedFile = imageInput.files[0] || selectedFile;
             previewImg.src = originalImage.src;
             statusText.textContent = 'Crop reset.';
         });
+
+        // --- Merge color layers into a single interleaved draw list ---
+        // Interleaves lines from all 4 channels round-robin for natural layering
+        function buildMergedLines(layers) {
+            const result = [];
+            const indices = layers.map(() => 0);
+            let hasMore = true;
+            while (hasMore) {
+                hasMore = false;
+                for (let l = 0; l < layers.length; l++) {
+                    const seq = layers[l].line_sequence;
+                    const color = layers[l].color;
+                    if (indices[l] < seq.length - 1) {
+                        result.push({ from: seq[indices[l]], to: seq[indices[l] + 1], color: color });
+                        indices[l]++;
+                        hasMore = true;
+                    }
+                }
+            }
+            return result;
+        }
+
+        // Helper: total line count
+        function getTotalLines() {
+            if (currentMode === 'color' && mergedLines) return mergedLines.length;
+            if (lineSequence) return lineSequence.length - 1;
+            return 0;
+        }
+
+        // Helper: get line color for guided mode (confirmed line)
+        function getLineColor(index) {
+            if (currentMode === 'color' && mergedLines) return mergedLines[index].color;
+            return 'rgba(0,0,0,0.7)';
+        }
+
+        // Helper: get from/to pins
+        function getLineFromTo(index) {
+            if (currentMode === 'color' && mergedLines) {
+                return { from: mergedLines[index].from, to: mergedLines[index].to };
+            }
+            return { from: lineSequence[index], to: lineSequence[index + 1] };
+        }
 
         // --- Generate ---
         generateBtn.addEventListener('click', async () => {
             if (!selectedFile) return;
 
             generateBtn.disabled = true;
-            statusText.textContent = 'Processing... This may take a few seconds.';
+            const modeLabel = selectedMode === 'color' ? 'Color' : 'B&W';
+            statusText.textContent = 'Processing (' + modeLabel + ')... This may take a few seconds.';
             progressBar.classList.remove('hidden');
             progressFill.style.width = '0%';
 
-            // Simulate progress since server doesn't stream
             let progress = 0;
             const progressInterval = setInterval(() => {
                 progress += Math.random() * 8;
@@ -396,40 +398,51 @@
             formData.append('pins', document.getElementById('pinsInput').value);
             formData.append('maxLines', document.getElementById('linesInput').value);
             formData.append('lineWeight', document.getElementById('weightInput').value);
+            formData.append('mode', selectedMode);
 
             try {
-                const response = await fetch('/api/generate', {
-                    method: 'POST',
-                    body: formData
-                });
-
+                const response = await fetch('/api/generate', { method: 'POST', body: formData });
                 clearInterval(progressInterval);
-
-                if (!response.ok) {
-                    const err = await response.text();
-                    throw new Error(err);
-                }
+                if (!response.ok) throw new Error(await response.text());
 
                 const data = await response.json();
                 pinCoords = data.pin_coords;
-                lineSequence = data.line_sequence;
                 imgSize = data.img_size;
+                currentMode = data.mode;
 
-                progressFill.style.width = '100%';
-                statusText.textContent = 'Done! ' + lineSequence.length + ' lines generated.';
+                if (currentMode === 'color') {
+                    colorLayers = data.color_layers;
+                    lineSequence = null;
+                    mergedLines = buildMergedLines(colorLayers);
 
-                // Enable controls
+                    let totalLines = mergedLines.length;
+                    progressFill.style.width = '100%';
+                    statusText.textContent = 'Done! ' + totalLines + ' color lines generated (4 channels).';
+
+                    // Build sequence output showing per-channel info
+                    let seqText = '';
+                    const channelNames = ['Cyan', 'Magenta', 'Yellow', 'Black'];
+                    for (let i = 0; i < colorLayers.length; i++) {
+                        seqText += channelNames[i] + ': ' + colorLayers[i].line_sequence.join(',') + '\n\n';
+                    }
+                    sequenceOutput.value = seqText;
+                } else {
+                    lineSequence = data.line_sequence;
+                    colorLayers = null;
+                    mergedLines = null;
+
+                    progressFill.style.width = '100%';
+                    statusText.textContent = 'Done! ' + (lineSequence.length - 1) + ' lines generated.';
+                    sequenceOutput.value = lineSequence.join(',');
+                }
+
                 playBtn.disabled = false;
                 pauseBtn.disabled = false;
                 resetBtn.disabled = false;
                 prevStepBtn.disabled = false;
                 nextStepBtn.disabled = false;
-
-                // Show sequence
                 sequencePanel.classList.remove('hidden');
-                sequenceOutput.value = lineSequence.join(',');
 
-                // Reset and start animation
                 resetAnimation();
                 resetGuided();
                 startAnimation();
@@ -459,7 +472,7 @@
             });
         });
 
-        // Animation
+        // --- Drawing helpers ---
         function clearCanvas(ctx) {
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvasSize, canvasSize);
@@ -472,8 +485,6 @@
             ctx.beginPath();
             ctx.arc(canvasSize / 2, canvasSize / 2, canvasSize / 2 - 1, 0, 2 * Math.PI);
             ctx.stroke();
-
-            // Draw pin markers
             ctx.fillStyle = '#cccccc';
             for (let i = 0; i < pinCoords.length; i++) {
                 ctx.beginPath();
@@ -491,63 +502,59 @@
             ctx.stroke();
         }
 
+        // --- Animation ---
         function resetAnimation() {
             if (animFrame) cancelAnimationFrame(animFrame);
             isPlaying = false;
             animIndex = 0;
             clearCanvas(animCtx);
             drawPinCircle(animCtx);
-            animationStatus.textContent = '0 / ' + (lineSequence ? lineSequence.length - 1 : 0) + ' lines';
+            animationStatus.textContent = '0 / ' + getTotalLines() + ' lines';
         }
 
         function startAnimation() {
-            if (!lineSequence || lineSequence.length < 2) return;
+            if (getTotalLines() < 1) return;
             isPlaying = true;
             animateStep();
         }
 
         function animateStep() {
-            if (!isPlaying || !lineSequence) return;
-
+            if (!isPlaying) return;
+            const total = getTotalLines();
             const speed = parseInt(speedSelect.value);
-            const linesPerFrame = speed === 0 ? lineSequence.length : speed;
+            const linesPerFrame = speed === 0 ? total + 1 : speed;
 
             for (let s = 0; s < linesPerFrame; s++) {
-                if (animIndex >= lineSequence.length - 1) {
+                if (animIndex >= total) {
                     isPlaying = false;
-                    animationStatus.textContent = (lineSequence.length - 1) + ' / ' + (lineSequence.length - 1) + ' lines (complete)';
+                    animationStatus.textContent = total + ' / ' + total + ' lines (complete)';
                     return;
                 }
-                drawLine(animCtx, lineSequence[animIndex], lineSequence[animIndex + 1], 'rgba(0,0,0,0.7)', 0.3);
+                const { from, to } = getLineFromTo(animIndex);
+                const color = getLineColor(animIndex);
+                drawLine(animCtx, from, to, color, 0.3);
                 animIndex++;
             }
 
-            animationStatus.textContent = animIndex + ' / ' + (lineSequence.length - 1) + ' lines';
-
+            animationStatus.textContent = animIndex + ' / ' + total + ' lines';
             if (speed === 0) {
-                animationStatus.textContent = (lineSequence.length - 1) + ' / ' + (lineSequence.length - 1) + ' lines (complete)';
                 isPlaying = false;
                 return;
             }
-
             animFrame = requestAnimationFrame(animateStep);
         }
 
         playBtn.addEventListener('click', () => {
-            if (animIndex >= lineSequence.length - 1) {
-                resetAnimation();
-            }
+            if (animIndex >= getTotalLines()) resetAnimation();
             startAnimation();
         });
         pauseBtn.addEventListener('click', () => {
             isPlaying = false;
             if (animFrame) cancelAnimationFrame(animFrame);
         });
-        resetBtn.addEventListener('click', () => {
-            resetAnimation();
-        });
+        resetBtn.addEventListener('click', resetAnimation);
 
-        // Guided creation
+        // --- Guided creation ---
         function resetGuided() {
             guidedIndex = 0;
             lastStepImageData = null;
@@ -557,82 +564,85 @@
         }
 
         function updateGuidedInfo() {
-            if (!lineSequence || lineSequence.length < 2) {
+            const total = getTotalLines();
+            if (total < 1) {
                 stepInfo.textContent = 'Upload and generate to start';
                 currentPinLabel.textContent = '';
                 nextPinLabel.textContent = '';
                 return;
             }
-
-            if (guidedIndex >= lineSequence.length - 1) {
-                stepInfo.textContent = 'Complete! All ' + (lineSequence.length - 1) + ' lines drawn.';
+            if (guidedIndex >= total) {
+                stepInfo.textContent = 'Complete! All ' + total + ' lines drawn.';
                 currentPinLabel.textContent = '';
                 nextPinLabel.textContent = '';
                 return;
             }
+            const { from, to } = getLineFromTo(guidedIndex);
+            stepInfo.textContent = 'Line ' + (guidedIndex + 1) + ' of ' + total;
+            currentPinLabel.textContent = 'From Pin: ' + from;
 
-            stepInfo.textContent = 'Line ' + (guidedIndex + 1) + ' of ' + (lineSequence.length - 1);
-            currentPinLabel.textContent = 'From Pin: ' + lineSequence[guidedIndex];
-            nextPinLabel.textContent = 'To Pin: ' + lineSequence[guidedIndex + 1];
+            // Show thread color name in color mode
+            let toLabel = 'To Pin: ' + to;
+            if (currentMode === 'color' && mergedLines) {
+                const c = mergedLines[guidedIndex].color;
+                let name = 'thread';
+                if (c.includes('180,220')) name = 'CYAN thread';
+                else if (c.includes('200,0,100')) name = 'MAGENTA thread';
+                else if (c.includes('200,180,0')) name = 'YELLOW thread';
+                else if (c.includes('0,0,0')) name = 'BLACK thread';
+                toLabel += ' (' + name + ')';
+            }
+            nextPinLabel.textContent = toLabel;
         }
 
         function nextStep() {
-            if (!lineSequence || guidedIndex >= lineSequence.length - 1) return;
+            const total = getTotalLines();
+            if (total < 1 || guidedIndex >= total) return;
 
-            // Draw the previous current line in black (confirm it)
+            // Confirm previous line
             if (guidedIndex > 0) {
                 guidedCtx.putImageData(lastStepImageData, 0, 0);
-                drawLine(guidedCtx, lineSequence[guidedIndex - 1], lineSequence[guidedIndex], 'rgba(0,0,0,0.7)', 0.3);
+                const prev = getLineFromTo(guidedIndex - 1);
+                drawLine(guidedCtx, prev.from, prev.to, getLineColor(guidedIndex - 1), 0.3);
             }
 
-            // Save state before drawing the red highlight
             lastStepImageData = guidedCtx.getImageData(0, 0, canvasSize, canvasSize);
 
-            // Draw the current line in red (highlight)
+            // Draw current line highlighted
+            const cur = getLineFromTo(guidedIndex);
+            drawLine(guidedCtx, cur.from, cur.to, '#FF0000', 1.5);
             guidedIndex++;
-            drawLine(guidedCtx, lineSequence[guidedIndex - 1], lineSequence[guidedIndex], '#FF0000', 1.5);
-
             updateGuidedInfo();
         }
 
         function prevStep() {
-            if (!lineSequence || guidedIndex < 2) return;
-
+            if (guidedIndex < 2) return;
             guidedIndex -= 2;
 
-            // Redraw everything up to guidedIndex
             clearCanvas(guidedCtx);
             drawPinCircle(guidedCtx);
-
             for (let i = 0; i < guidedIndex; i++) {
-                drawLine(guidedCtx, lineSequence[i], lineSequence[i + 1], 'rgba(0,0,0,0.7)', 0.3);
+                const { from, to } = getLineFromTo(i);
+                drawLine(guidedCtx, from, to, getLineColor(i), 0.3);
             }
 
             lastStepImageData = guidedCtx.getImageData(0, 0, canvasSize, canvasSize);
 
-            // Draw current line in red
+            const cur = getLineFromTo(guidedIndex);
+            drawLine(guidedCtx, cur.from, cur.to, '#FF0000', 1.5);
             guidedIndex++;
-            drawLine(guidedCtx, lineSequence[guidedIndex - 1], lineSequence[guidedIndex], '#FF0000', 1.5);
-
             updateGuidedInfo();
         }
 
         nextStepBtn.addEventListener('click', nextStep);
         prevStepBtn.addEventListener('click', prevStep);
 
-        // Keyboard navigation
         document.addEventListener('keydown', (e) => {
             if (!listenForKeys) return;
-            if (e.key === 'ArrowRight' || e.key === ' ') {
-                e.preventDefault();
-                nextStep();
-            } else if (e.key === 'ArrowLeft') {
-                e.preventDefault();
-                prevStep();
-            }
+            if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nextStep(); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); prevStep(); }
         });
 
-        // Copy sequence
         copyBtn.addEventListener('click', () => {
             sequenceOutput.select();
             navigator.clipboard.writeText(sequenceOutput.value).then(() => {
@@ -641,7 +651,6 @@
             });
         });
 
-        // Init canvases
         clearCanvas(animCtx);
         clearCanvas(guidedCtx);
     })();
