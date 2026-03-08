@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>String Art Generator</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app">
+        <header>
+            <h1>String Art Generator</h1>
+            <p class="subtitle">Upload an image, generate string art, and follow the guided creation process</p>
+        </header>
+
+        <div class="main-content">
+            <!-- Upload & Settings Panel -->
+            <div class="panel settings-panel">
+                <h2>Settings</h2>
+
+                <div class="upload-area" id="uploadArea">
+                    <input type="file" id="imageInput" accept="image/jpeg,image/png" hidden>
+                    <div class="upload-placeholder" id="uploadPlaceholder">
+                        <div class="upload-icon">+</div>
+                        <p>Click or drag to upload image</p>
+                        <p class="hint">JPG or PNG, max 10MB</p>
+                    </div>
+                    <img id="previewImg" class="preview-img hidden" alt="Preview">
+                </div>
+
+                <!-- Crop Tool -->
+                <div id="cropSection" class="crop-section hidden">
+                    <div class="crop-header">
+                        <label>Crop Image</label>
+                        <div class="crop-actions">
+                            <button id="cropBtn" class="btn btn-small">Apply Crop</button>
+                            <button id="cropResetBtn" class="btn btn-small">Reset</button>
+                        </div>
+                    </div>
+                    <div class="crop-container" id="cropContainer">
+                        <canvas id="cropCanvas"></canvas>
+                        <div class="crop-overlay" id="cropOverlay"></div>
+                    </div>
+                    <p class="hint crop-hint">Drag to select crop area (square). The server also auto-crops to square from center.</p>
+                </div>
+
+                <div class="controls">
+                    <div class="control-group">
+                        <label for="pinsInput">Number of Pins</label>
+                        <input type="range" id="pinsRange" min="50" max="500" value="300" oninput="pinsInput.value=this.value">
+                        <input type="number" id="pinsInput" min="50" max="500" value="300" oninput="pinsRange.value=this.value">
+                    </div>
+                    <div class="control-group">
+                        <label for="linesInput">Max Lines</label>
+                        <input type="range" id="linesRange" min="100" max="10000" value="4000" step="100" oninput="linesInput.value=this.value">
+                        <input type="number" id="linesInput" min="100" max="10000" value="4000" step="100" oninput="linesRange.value=this.value">
+                    </div>
+                    <div class="control-group">
+                        <label for="weightInput">Thread Weight</label>
+                        <input type="range" id="weightRange" min="1" max="100" value="20" oninput="weightInput.value=this.value">
+                        <input type="number" id="weightInput" min="1" max="100" value="20" oninput="weightRange.value=this.value">
+                    </div>
+                </div>
+
+                <button id="generateBtn" class="btn btn-primary" disabled>Generate String Art</button>
+                <div id="statusText" class="status-text"></div>
+                <div id="progressBar" class="progress-bar hidden">
+                    <div id="progressFill" class="progress-fill"></div>
+                </div>
+            </div>
+
+            <!-- Canvas Display Panel -->
+            <div class="panel canvas-panel">
+                <div class="tabs">
+                    <button class="tab active" data-tab="animation" id="tabAnimation">Animation</button>
+                    <button class="tab" data-tab="guided" id="tabGuided">Guided Creation</button>
+                </div>
+
+                <!-- Animation View -->
+                <div class="tab-content active" id="animationView">
+                    <div class="canvas-wrapper">
+                        <canvas id="animationCanvas" width="1000" height="1000"></canvas>
+                    </div>
+                    <div class="animation-controls">
+                        <button id="playBtn" class="btn" disabled>Play</button>
+                        <button id="pauseBtn" class="btn" disabled>Pause</button>
+                        <button id="resetBtn" class="btn" disabled>Reset</button>
+                        <div class="speed-control">
+                            <label>Speed:</label>
+                            <select id="speedSelect">
+                                <option value="1">1x</option>
+                                <option value="5">5x</option>
+                                <option value="10" selected>10x</option>
+                                <option value="50">50x</option>
+                                <option value="0">Instant</option>
+                            </select>
+                        </div>
+                        <span id="animationStatus" class="anim-status"></span>
+                    </div>
+                </div>
+
+                <!-- Guided Creation View -->
+                <div class="tab-content" id="guidedView">
+                    <div class="canvas-wrapper">
+                        <canvas id="guidedCanvas" width="1000" height="1000"></canvas>
+                    </div>
+                    <div class="guided-controls">
+                        <button id="prevStepBtn" class="btn" disabled>Previous</button>
+                        <span id="stepInfo" class="step-info">Upload and generate to start</span>
+                        <button id="nextStepBtn" class="btn" disabled>Next</button>
+                    </div>
+                    <div class="guided-hint">
+                        <p>Use <kbd>Left Arrow</kbd> / <kbd>Right Arrow</kbd> or <kbd>Space</kbd> to navigate steps</p>
+                    </div>
+                    <div class="pin-highlight" id="pinHighlight">
+                        <span id="currentPinLabel"></span>
+                        <span id="nextPinLabel"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pin Sequence Output -->
+        <div class="panel sequence-panel hidden" id="sequencePanel">
+            <h3>Pin Sequence</h3>
+            <textarea id="sequenceOutput" rows="4" readonly></textarea>
+            <button id="copyBtn" class="btn">Copy Sequence</button>
+        </div>
+    </div>
+
+    <script>
+    (function() {
+        // State
+        let pinCoords = null;
+        let lineSequence = null;
+        let imgSize = 500;
+        let animFrame = null;
+        let animIndex = 0;
+        let isPlaying = false;
+        let guidedIndex = 0;
+        let lastStepImageData = null;
+        let listenForKeys = false;
+        let selectedFile = null;
+        let originalImage = null; // HTMLImageElement of uploaded image
+
+        // Crop state
+        let cropActive = false;
+        let cropStartX = 0, cropStartY = 0;
+        let cropX = 0, cropY = 0, cropW = 0, cropH = 0;
+        let isDragging = false;
+        let cropScale = 1; // ratio of displayed size to actual image size
+
+        // DOM elements
+        const imageInput = document.getElementById('imageInput');
+        const uploadArea = document.getElementById('uploadArea');
+        const uploadPlaceholder = document.getElementById('uploadPlaceholder');
+        const previewImg = document.getElementById('previewImg');
+        const generateBtn = document.getElementById('generateBtn');
+        const statusText = document.getElementById('statusText');
+        const progressBar = document.getElementById('progressBar');
+        const progressFill = document.getElementById('progressFill');
+
+        const animCanvas = document.getElementById('animationCanvas');
+        const animCtx = animCanvas.getContext('2d');
+        const guidedCanvas = document.getElementById('guidedCanvas');
+        const guidedCtx = guidedCanvas.getContext('2d');
+
+        const playBtn = document.getElementById('playBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const speedSelect = document.getElementById('speedSelect');
+        const animationStatus = document.getElementById('animationStatus');
+
+        const prevStepBtn = document.getElementById('prevStepBtn');
+        const nextStepBtn = document.getElementById('nextStepBtn');
+        const stepInfo = document.getElementById('stepInfo');
+        const currentPinLabel = document.getElementById('currentPinLabel');
+        const nextPinLabel = document.getElementById('nextPinLabel');
+        const pinHighlight = document.getElementById('pinHighlight');
+
+        const sequencePanel = document.getElementById('sequencePanel');
+        const sequenceOutput = document.getElementById('sequenceOutput');
+        const copyBtn = document.getElementById('copyBtn');
+
+        const cropSection = document.getElementById('cropSection');
+        const cropContainer = document.getElementById('cropContainer');
+        const cropCanvas = document.getElementById('cropCanvas');
+        const cropCtx = cropCanvas.getContext('2d');
+        const cropOverlay = document.getElementById('cropOverlay');
+        const cropBtn = document.getElementById('cropBtn');
+        const cropResetBtn = document.getElementById('cropResetBtn');
+
+        const canvasScale = 2; // Draw at 2x for quality
+        const canvasSize = 1000; // 500 * 2
+
+        // Upload handling
+        uploadArea.addEventListener('click', () => imageInput.click());
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+        imageInput.addEventListener('change', () => {
+            if (imageInput.files.length) {
+                handleFile(imageInput.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            if (!file.type.match(/^image\/(jpeg|png)$/)) {
+                statusText.textContent = 'Please upload a JPG or PNG image.';
+                return;
+            }
+            selectedFile = file;
+            const url = URL.createObjectURL(file);
+            previewImg.src = url;
+            previewImg.classList.remove('hidden');
+            uploadPlaceholder.classList.add('hidden');
+            generateBtn.disabled = false;
+            statusText.textContent = '';
+
+            // Load image for crop tool
+            originalImage = new Image();
+            originalImage.onload = function() {
+                initCropTool(originalImage);
+            };
+            originalImage.src = url;
+        }
+
+        // --- Crop Tool ---
+        function initCropTool(img) {
+            cropSection.classList.remove('hidden');
+
+            // Fit image into the crop container (max 280px wide to fit settings panel)
+            const maxW = 280;
+            const maxH = 280;
+            let dispW = img.width;
+            let dispH = img.height;
+            if (dispW > maxW) { dispH *= maxW / dispW; dispW = maxW; }
+            if (dispH > maxH) { dispW *= maxH / dispH; dispH = maxH; }
+            dispW = Math.round(dispW);
+            dispH = Math.round(dispH);
+
+            cropCanvas.width = dispW;
+            cropCanvas.height = dispH;
+            cropCanvas.style.width = dispW + 'px';
+            cropCanvas.style.height = dispH + 'px';
+            cropScale = img.width / dispW;
+
+            cropCtx.drawImage(img, 0, 0, dispW, dispH);
+
+            // Default crop: full image
+            cropX = 0; cropY = 0; cropW = dispW; cropH = dispH;
+            cropActive = false;
+            drawCropOverlay();
+        }
+
+        function drawCropOverlay() {
+            // Use a canvas overlay approach: redraw image then darken outside crop
+            cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
+            cropCtx.drawImage(originalImage, 0, 0, cropCanvas.width, cropCanvas.height);
+
+            if (cropActive && cropW > 5 && cropH > 5) {
+                // Darken everything
+                cropCtx.fillStyle = 'rgba(0,0,0,0.5)';
+                cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+
+                // Clear the crop region to show bright
+                cropCtx.save();
+                cropCtx.beginPath();
+                cropCtx.rect(cropX, cropY, cropW, cropH);
+                cropCtx.clip();
+                cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
+                cropCtx.drawImage(originalImage, 0, 0, cropCanvas.width, cropCanvas.height);
+                cropCtx.restore();
+
+                // Draw crop border
+                cropCtx.strokeStyle = '#1a73e8';
+                cropCtx.lineWidth = 2;
+                cropCtx.setLineDash([4, 4]);
+                cropCtx.strokeRect(cropX, cropY, cropW, cropH);
+                cropCtx.setLineDash([]);
+            }
+        }
+
+        cropCanvas.addEventListener('mousedown', (e) => {
+            const rect = cropCanvas.getBoundingClientRect();
+            cropStartX = e.clientX - rect.left;
+            cropStartY = e.clientY - rect.top;
+            isDragging = true;
+            cropActive = true;
+        });
+
+        cropCanvas.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const rect = cropCanvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
+            // Calculate square crop region
+            let dx = mx - cropStartX;
+            let dy = my - cropStartY;
+            // Make it square based on the larger dimension
+            let size = Math.max(Math.abs(dx), Math.abs(dy));
+            if (dx < 0) size = -size;
+            let sizeY = size;
+            if (dy < 0) sizeY = -sizeY;
+
+            let x = cropStartX, y = cropStartY, w = size, h = sizeY;
+            // Normalize to positive width/height
+            if (w < 0) { x += w; w = -w; }
+            if (h < 0) { y += h; h = -h; }
+            // Make square
+            let s = Math.min(w, h);
+            // Keep within bounds
+            x = Math.max(0, Math.min(x, cropCanvas.width - s));
+            y = Math.max(0, Math.min(y, cropCanvas.height - s));
+            s = Math.min(s, cropCanvas.width - x, cropCanvas.height - y);
+
+            cropX = x; cropY = y; cropW = s; cropH = s;
+            drawCropOverlay();
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+
+        cropBtn.addEventListener('click', () => {
+            if (!originalImage || !cropActive || cropW < 10) {
+                statusText.textContent = 'Draw a crop region first.';
+                return;
+            }
+            // Crop the original image using a temp canvas
+            const sx = Math.round(cropX * cropScale);
+            const sy = Math.round(cropY * cropScale);
+            const sw = Math.round(cropW * cropScale);
+            const sh = Math.round(cropH * cropScale);
+
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = sw;
+            tempCanvas.height = sh;
+            const tCtx = tempCanvas.getContext('2d');
+            tCtx.drawImage(originalImage, sx, sy, sw, sh, 0, 0, sw, sh);
+
+            // Update preview
+            previewImg.src = tempCanvas.toDataURL('image/png');
+
+            // Convert to blob and set as selectedFile
+            tempCanvas.toBlob((blob) => {
+                selectedFile = new File([blob], 'cropped.png', { type: 'image/png' });
+                statusText.textContent = 'Image cropped (' + sw + 'x' + sh + '). Ready to generate.';
+            }, 'image/png');
+        });
+
+        cropResetBtn.addEventListener('click', () => {
+            if (!originalImage) return;
+            cropActive = false;
+            cropX = 0; cropY = 0; cropW = cropCanvas.width; cropH = cropCanvas.height;
+            drawCropOverlay();
+            // Reset selectedFile to original
+            const url = previewImg.src;
+            // Re-read original file
+            selectedFile = imageInput.files[0] || selectedFile;
+            previewImg.src = originalImage.src;
+            statusText.textContent = 'Crop reset.';
+        });
+
+        // --- Generate ---
+        generateBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            generateBtn.disabled = true;
+            statusText.textContent = 'Processing... This may take a few seconds.';
+            progressBar.classList.remove('hidden');
+            progressFill.style.width = '0%';
+
+            // Simulate progress since server doesn't stream
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += Math.random() * 8;
+                if (progress > 90) progress = 90;
+                progressFill.style.width = progress + '%';
+            }, 200);
+
+            const formData = new FormData();
+            formData.append('image', selectedFile);
+            formData.append('pins', document.getElementById('pinsInput').value);
+            formData.append('maxLines', document.getElementById('linesInput').value);
+            formData.append('lineWeight', document.getElementById('weightInput').value);
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                clearInterval(progressInterval);
+
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+
+                const data = await response.json();
+                pinCoords = data.pin_coords;
+                lineSequence = data.line_sequence;
+                imgSize = data.img_size;
+
+                progressFill.style.width = '100%';
+                statusText.textContent = 'Done! ' + lineSequence.length + ' lines generated.';
+
+                // Enable controls
+                playBtn.disabled = false;
+                pauseBtn.disabled = false;
+                resetBtn.disabled = false;
+                prevStepBtn.disabled = false;
+                nextStepBtn.disabled = false;
+
+                // Show sequence
+                sequencePanel.classList.remove('hidden');
+                sequenceOutput.value = lineSequence.join(',');
+
+                // Reset and start animation
+                resetAnimation();
+                resetGuided();
+                startAnimation();
+
+            } catch (err) {
+                clearInterval(progressInterval);
+                statusText.textContent = 'Error: ' + err.message;
+                progressBar.classList.add('hidden');
+                generateBtn.disabled = false;
+            }
+        });
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                const target = tab.getAttribute('data-tab');
+                if (target === 'animation') {
+                    document.getElementById('animationView').classList.add('active');
+                    listenForKeys = false;
+                } else {
+                    document.getElementById('guidedView').classList.add('active');
+                    listenForKeys = true;
+                }
+            });
+        });
+
+        // Animation
+        function clearCanvas(ctx) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvasSize, canvasSize);
+        }
+
+        function drawPinCircle(ctx) {
+            if (!pinCoords) return;
+            ctx.strokeStyle = '#e0e0e0';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(canvasSize / 2, canvasSize / 2, canvasSize / 2 - 1, 0, 2 * Math.PI);
+            ctx.stroke();
+
+            // Draw pin markers
+            ctx.fillStyle = '#cccccc';
+            for (let i = 0; i < pinCoords.length; i++) {
+                ctx.beginPath();
+                ctx.arc(pinCoords[i][0] * canvasScale, pinCoords[i][1] * canvasScale, 2, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
+        function drawLine(ctx, fromPin, toPin, color, width) {
+            ctx.beginPath();
+            ctx.moveTo(pinCoords[fromPin][0] * canvasScale, pinCoords[fromPin][1] * canvasScale);
+            ctx.lineTo(pinCoords[toPin][0] * canvasScale, pinCoords[toPin][1] * canvasScale);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.stroke();
+        }
+
+        function resetAnimation() {
+            if (animFrame) cancelAnimationFrame(animFrame);
+            isPlaying = false;
+            animIndex = 0;
+            clearCanvas(animCtx);
+            drawPinCircle(animCtx);
+            animationStatus.textContent = '0 / ' + (lineSequence ? lineSequence.length - 1 : 0) + ' lines';
+        }
+
+        function startAnimation() {
+            if (!lineSequence || lineSequence.length < 2) return;
+            isPlaying = true;
+            animateStep();
+        }
+
+        function animateStep() {
+            if (!isPlaying || !lineSequence) return;
+
+            const speed = parseInt(speedSelect.value);
+            const linesPerFrame = speed === 0 ? lineSequence.length : speed;
+
+            for (let s = 0; s < linesPerFrame; s++) {
+                if (animIndex >= lineSequence.length - 1) {
+                    isPlaying = false;
+                    animationStatus.textContent = (lineSequence.length - 1) + ' / ' + (lineSequence.length - 1) + ' lines (complete)';
+                    return;
+                }
+                drawLine(animCtx, lineSequence[animIndex], lineSequence[animIndex + 1], 'rgba(0,0,0,0.7)', 0.3);
+                animIndex++;
+            }
+
+            animationStatus.textContent = animIndex + ' / ' + (lineSequence.length - 1) + ' lines';
+
+            if (speed === 0) {
+                animationStatus.textContent = (lineSequence.length - 1) + ' / ' + (lineSequence.length - 1) + ' lines (complete)';
+                isPlaying = false;
+                return;
+            }
+
+            animFrame = requestAnimationFrame(animateStep);
+        }
+
+        playBtn.addEventListener('click', () => {
+            if (animIndex >= lineSequence.length - 1) {
+                resetAnimation();
+            }
+            startAnimation();
+        });
+        pauseBtn.addEventListener('click', () => {
+            isPlaying = false;
+            if (animFrame) cancelAnimationFrame(animFrame);
+        });
+        resetBtn.addEventListener('click', () => {
+            resetAnimation();
+        });
+
+        // Guided creation
+        function resetGuided() {
+            guidedIndex = 0;
+            lastStepImageData = null;
+            clearCanvas(guidedCtx);
+            drawPinCircle(guidedCtx);
+            updateGuidedInfo();
+        }
+
+        function updateGuidedInfo() {
+            if (!lineSequence || lineSequence.length < 2) {
+                stepInfo.textContent = 'Upload and generate to start';
+                currentPinLabel.textContent = '';
+                nextPinLabel.textContent = '';
+                return;
+            }
+
+            if (guidedIndex >= lineSequence.length - 1) {
+                stepInfo.textContent = 'Complete! All ' + (lineSequence.length - 1) + ' lines drawn.';
+                currentPinLabel.textContent = '';
+                nextPinLabel.textContent = '';
+                return;
+            }
+
+            stepInfo.textContent = 'Line ' + (guidedIndex + 1) + ' of ' + (lineSequence.length - 1);
+            currentPinLabel.textContent = 'From Pin: ' + lineSequence[guidedIndex];
+            nextPinLabel.textContent = 'To Pin: ' + lineSequence[guidedIndex + 1];
+        }
+
+        function nextStep() {
+            if (!lineSequence || guidedIndex >= lineSequence.length - 1) return;
+
+            // Draw the previous current line in black (confirm it)
+            if (guidedIndex > 0) {
+                guidedCtx.putImageData(lastStepImageData, 0, 0);
+                drawLine(guidedCtx, lineSequence[guidedIndex - 1], lineSequence[guidedIndex], 'rgba(0,0,0,0.7)', 0.3);
+            }
+
+            // Save state before drawing the red highlight
+            lastStepImageData = guidedCtx.getImageData(0, 0, canvasSize, canvasSize);
+
+            // Draw the current line in red (highlight)
+            guidedIndex++;
+            drawLine(guidedCtx, lineSequence[guidedIndex - 1], lineSequence[guidedIndex], '#FF0000', 1.5);
+
+            updateGuidedInfo();
+        }
+
+        function prevStep() {
+            if (!lineSequence || guidedIndex < 2) return;
+
+            guidedIndex -= 2;
+
+            // Redraw everything up to guidedIndex
+            clearCanvas(guidedCtx);
+            drawPinCircle(guidedCtx);
+
+            for (let i = 0; i < guidedIndex; i++) {
+                drawLine(guidedCtx, lineSequence[i], lineSequence[i + 1], 'rgba(0,0,0,0.7)', 0.3);
+            }
+
+            lastStepImageData = guidedCtx.getImageData(0, 0, canvasSize, canvasSize);
+
+            // Draw current line in red
+            guidedIndex++;
+            drawLine(guidedCtx, lineSequence[guidedIndex - 1], lineSequence[guidedIndex], '#FF0000', 1.5);
+
+            updateGuidedInfo();
+        }
+
+        nextStepBtn.addEventListener('click', nextStep);
+        prevStepBtn.addEventListener('click', prevStep);
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (!listenForKeys) return;
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
+                nextStep();
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                prevStep();
+            }
+        });
+
+        // Copy sequence
+        copyBtn.addEventListener('click', () => {
+            sequenceOutput.select();
+            navigator.clipboard.writeText(sequenceOutput.value).then(() => {
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => { copyBtn.textContent = 'Copy Sequence'; }, 2000);
+            });
+        });
+
+        // Init canvases
+        clearCanvas(animCtx);
+        clearCanvas(guidedCtx);
+    })();
+    </script>
+</body>
+</html>

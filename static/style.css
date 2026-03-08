@@ -1,0 +1,422 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f5f5f5;
+    color: #333;
+    min-height: 100vh;
+}
+
+.app {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #1a1a1a;
+}
+
+.subtitle {
+    color: #666;
+    margin-top: 4px;
+    font-size: 14px;
+}
+
+.main-content {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+}
+
+.panel {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.settings-panel {
+    width: 320px;
+    flex-shrink: 0;
+}
+
+.canvas-panel {
+    flex: 1;
+    min-width: 0;
+}
+
+.settings-panel h2 {
+    font-size: 18px;
+    margin-bottom: 16px;
+}
+
+/* Upload area */
+.upload-area {
+    border: 2px dashed #ccc;
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    margin-bottom: 16px;
+    min-height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+}
+
+.upload-area:hover, .upload-area.dragover {
+    border-color: #4a90d9;
+    background: #f0f6ff;
+}
+
+.upload-icon {
+    font-size: 36px;
+    color: #999;
+    line-height: 1;
+}
+
+.upload-placeholder p {
+    margin-top: 6px;
+    color: #888;
+    font-size: 13px;
+}
+
+.upload-placeholder .hint {
+    font-size: 11px;
+    color: #aaa;
+}
+
+.preview-img {
+    max-width: 100%;
+    max-height: 200px;
+    border-radius: 6px;
+    object-fit: contain;
+}
+
+/* Controls */
+.controls {
+    margin-bottom: 16px;
+}
+
+.control-group {
+    margin-bottom: 12px;
+}
+
+.control-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #555;
+    margin-bottom: 4px;
+}
+
+.control-group input[type="range"] {
+    width: calc(100% - 80px);
+    vertical-align: middle;
+}
+
+.control-group input[type="number"] {
+    width: 70px;
+    padding: 4px 6px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    vertical-align: middle;
+    text-align: center;
+}
+
+/* Buttons */
+.btn {
+    padding: 8px 16px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s;
+}
+
+.btn:hover:not(:disabled) {
+    background: #f0f0f0;
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    width: 100%;
+    background: #1a73e8;
+    color: #fff;
+    border-color: #1a73e8;
+    font-weight: 600;
+    padding: 10px 16px;
+    font-size: 14px;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: #1557b0;
+}
+
+/* Status & Progress */
+.status-text {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #666;
+    text-align: center;
+    min-height: 18px;
+}
+
+.progress-bar {
+    margin-top: 8px;
+    height: 4px;
+    background: #eee;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: #1a73e8;
+    transition: width 0.3s;
+    border-radius: 2px;
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    border-bottom: 2px solid #eee;
+    margin-bottom: 16px;
+}
+
+.tab {
+    padding: 8px 20px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    color: #888;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: all 0.2s;
+}
+
+.tab:hover {
+    color: #333;
+}
+
+.tab.active {
+    color: #1a73e8;
+    border-bottom-color: #1a73e8;
+}
+
+/* Tab content */
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Canvas */
+.canvas-wrapper {
+    text-align: center;
+    margin-bottom: 12px;
+}
+
+canvas {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 0 0 1px #eee;
+}
+
+/* Animation controls */
+.animation-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.speed-control {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    color: #666;
+}
+
+.speed-control select {
+    padding: 4px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.anim-status {
+    margin-left: auto;
+    font-size: 12px;
+    color: #888;
+}
+
+/* Guided controls */
+.guided-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: center;
+    margin-bottom: 10px;
+}
+
+.step-info {
+    font-size: 14px;
+    font-weight: 600;
+    min-width: 200px;
+    text-align: center;
+}
+
+.guided-hint {
+    text-align: center;
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 10px;
+}
+
+.guided-hint kbd {
+    background: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 11px;
+}
+
+.pin-highlight {
+    display: flex;
+    justify-content: center;
+    gap: 30px;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+#currentPinLabel {
+    color: #333;
+}
+
+#nextPinLabel {
+    color: #e53e3e;
+}
+
+/* Sequence panel */
+.sequence-panel {
+    margin-top: 20px;
+}
+
+.sequence-panel h3 {
+    font-size: 16px;
+    margin-bottom: 8px;
+}
+
+.sequence-panel textarea {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-family: monospace;
+    font-size: 12px;
+    resize: vertical;
+    margin-bottom: 8px;
+}
+
+/* Crop tool */
+.crop-section {
+    margin-bottom: 16px;
+}
+
+.crop-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.crop-header label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #555;
+}
+
+.crop-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.btn-small {
+    padding: 4px 10px;
+    font-size: 11px;
+}
+
+.crop-container {
+    position: relative;
+    display: inline-block;
+    cursor: crosshair;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid #ddd;
+}
+
+#cropCanvas {
+    display: block;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.crop-hint {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #aaa;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .main-content {
+        flex-direction: column;
+    }
+
+    .settings-panel {
+        width: 100%;
+    }
+
+    .animation-controls {
+        justify-content: center;
+    }
+
+    .anim-status {
+        margin-left: 0;
+        width: 100%;
+        text-align: center;
+    }
+}

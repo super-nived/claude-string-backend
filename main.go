@@ -1,207 +1,319 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"math"
 	"image"
 	"image/jpeg"
-	"github.com/antha-lang/antha/antha/anthalib/num"
-	"os"
+	"image/png"
 	"io"
-	"time"
+	"math"
+	"net/http"
 	"strconv"
-	"syscall/js"
 )
 
-//**********************//
-//		Structs			//
-//**********************//
-type Coord struct {
-	X float64
-	Y float64
-}
+const defaultPins = 300
+const defaultMinDistance = 20
+const defaultMaxLines = 4000
+const defaultLineWeight = 20
+const workingSize = 500
 
-const PINS = 300
-const MIN_DISTANCE = 30
-const MAX_LINES = 4000
-const LINE_WEIGHT = 8
-var IMG_SIZE = 500
-var IMG_SIZE_FL = float64(500)
-var IMG_SIZE_SQ = 250000
-var Pin_coords = []Coord{}
-var SourceImage = []float64{}
-var Line_cache_y = [][]float64{}
-var Line_cache_x = [][]float64{}
-
-//**********************//
-//		Main			//
-//**********************//
-
-func init(){
-	image.RegisterFormat("jpeg", "jpeg", jpeg.Decode, jpeg.DecodeConfig)
+type GenerateResponse struct {
+	PinCoords    [][2]float64 `json:"pin_coords"`
+	LineSequence []int        `json:"line_sequence"`
+	ImgSize      int          `json:"img_size"`
+	NumPins      int          `json:"num_pins"`
+	MaxLines     int          `json:"max_lines"`
 }
 
 func main() {
-	SourceImage = importPictureAndGetPixelArray()
-	fmt.Println("Hello, world.")
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	http.HandleFunc("/api/generate", handleGenerate)
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "static/index.html")
+	})
 
-	startTime := time.Now()
-	calculatePinCoords()
-	precalculateAllPotentialLines()
-	calculateLines()
-	endTime := time.Now()
-	diff := endTime.Sub(startTime)
-	fmt.Println(" precalculateAllPotentialLines Taken, " + strconv.FormatFloat(diff.Seconds(), 'f', 6, 64))
-
-	fmt.Println("End")
+	fmt.Println("String Art Generator server starting on http://localhost:8080")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		fmt.Printf("Server error: %v\n", err)
+	}
 }
 
-func generateStringArt()
-
-func importPictureAndGetPixelArray() []float64 {
-	imgfile, _ := os.Open("./ae300.jpg")
-
-	defer imgfile.Close()
-	pixels, _ := getPixels(imgfile)
-	return pixels
-}
-
-func getPixels(file io.Reader) ([]float64, error) {
-	img, _, err := image.Decode(file)
-
-    if err != nil {
-        return nil, err
-    }
-
-    bounds := img.Bounds()
-	width, height := bounds.Max.X, bounds.Max.Y
-	IMG_SIZE = width
-	IMG_SIZE_FL = float64(IMG_SIZE)
-	IMG_SIZE_SQ =  IMG_SIZE * IMG_SIZE
-
-    var pixels []float64
-    for y := 0; y < height; y++ {
-        for x := 0; x < width; x++ {
-            pixels = append(pixels, rgbaToPixel(img.At(x, y).RGBA()))
-        }
-    }
-
-    return pixels, nil
-}
-
-func rgbaToPixel(r uint32, g uint32, b uint32, a uint32) float64 {
-    return float64(r / 257)
-}
-
-func calculatePinCoords() {
-	pin_coords := [PINS]Coord{}
-
-	center := float64(IMG_SIZE / 2)
-	radius := float64(IMG_SIZE/2 - 1)
-
-	for i:=0;i<PINS;i++ {
-		angle := 2 * math.Pi * float64(i) / float64(PINS)
-		pin_coords[i] = Coord{X : math.Floor(center + radius*math.Cos(angle)), Y : math.Floor(center + radius*math.Sin(angle))}
+func handleGenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	Pin_coords = pin_coords[:]
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB max
+
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		http.Error(w, "File too large or invalid form", http.StatusBadRequest)
+		return
+	}
+
+	file, _, err := r.FormFile("image")
+	if err != nil {
+		http.Error(w, "No image uploaded", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	pins := parseIntParam(r.FormValue("pins"), defaultPins)
+	maxLines := parseIntParam(r.FormValue("maxLines"), defaultMaxLines)
+	lineWeight := parseIntParam(r.FormValue("lineWeight"), defaultLineWeight)
+	minDistance := parseIntParam(r.FormValue("minDistance"), defaultMinDistance)
+
+	if pins < 50 {
+		pins = 50
+	} else if pins > 500 {
+		pins = 500
+	}
+	if maxLines < 100 {
+		maxLines = 100
+	} else if maxLines > 10000 {
+		maxLines = 10000
+	}
+	if lineWeight < 1 {
+		lineWeight = 1
+	} else if lineWeight > 100 {
+		lineWeight = 100
+	}
+
+	grayscale, err := processImage(file)
+	if err != nil {
+		http.Error(w, "Failed to process image: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	pinCoords := calculatePinCoords(pins, workingSize)
+	lineCacheX, lineCacheY := precalculateLines(pins, minDistance, pinCoords)
+	lineSequence := calculateLines(pins, maxLines, lineWeight, minDistance, grayscale, lineCacheX, lineCacheY)
+
+	resp := GenerateResponse{
+		PinCoords:    pinCoords,
+		LineSequence: lineSequence,
+		ImgSize:      workingSize,
+		NumPins:      pins,
+		MaxLines:     maxLines,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
-func precalculateAllPotentialLines() {
-	line_cache_y := [PINS * PINS][]float64{}
-	line_cache_x := [PINS * PINS][]float64{}
+func parseIntParam(s string, defaultVal int) int {
+	if s == "" {
+		return defaultVal
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return defaultVal
+	}
+	return v
+}
 
-	for i := 0; i < PINS; i++ {
-		for j := i + MIN_DISTANCE; j < PINS; j++ {
-			x0 := Pin_coords[i].X
-			y0 := Pin_coords[i].Y
+func processImage(file io.Reader) ([]float64, error) {
+	img, _, err := image.Decode(file)
+	if err != nil {
+		return nil, err
+	}
 
-			x1 := Pin_coords[j].X
-			y1 := Pin_coords[j].Y
+	bounds := img.Bounds()
+	w := bounds.Dx()
+	h := bounds.Dy()
 
-			d := math.Floor(math.Sqrt(float64((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0))))
-			xs := roundUpFloatArrayToInt(num.Linspace(float64(x0), float64(x1), int(d)))
-			ys := roundUpFloatArrayToInt(num.Linspace(float64(y0), float64(y1), int(d)))
+	// Square crop from center
+	cropSize := w
+	if h < w {
+		cropSize = h
+	}
+	xOffset := (w - cropSize) / 2
+	yOffset := (h - cropSize) / 2
 
-			line_cache_y[j*PINS+i] = ys
-			line_cache_y[i*PINS+j] = ys
-			line_cache_x[j*PINS+i] = xs
-			line_cache_x[i*PINS+j] = xs
+	// Resize to workingSize x workingSize and convert to grayscale
+	pixels := make([]float64, workingSize*workingSize)
+	for y := 0; y < workingSize; y++ {
+		for x := 0; x < workingSize; x++ {
+			// Nearest-neighbor sampling from the cropped region
+			srcX := xOffset + x*cropSize/workingSize
+			srcY := yOffset + y*cropSize/workingSize
+			srcX += bounds.Min.X
+			srcY += bounds.Min.Y
+
+			r, g, b, _ := img.At(srcX, srcY).RGBA()
+			// Average RGB for grayscale, scale from 16-bit to 8-bit
+			avg := float64(r+g+b) / 3.0 / 257.0
+			pixels[y*workingSize+x] = avg
 		}
 	}
-	Line_cache_y = line_cache_y[:][:]
-	Line_cache_x = line_cache_x[:][:]
-}
 
-func roundUpFloatArrayToInt(arr []float64) []float64 {
-	for i:= range arr {
-		arr[i] = float64(int(arr[i]))
+	// Circle mask: set pixels outside circle to white (255)
+	center := float64(workingSize) / 2.0
+	radius := center - 0.5
+	for y := 0; y < workingSize; y++ {
+		for x := 0; x < workingSize; x++ {
+			dx := float64(x) - center
+			dy := float64(y) - center
+			if dx*dx+dy*dy > radius*radius {
+				pixels[y*workingSize+x] = 255.0
+			}
+		}
 	}
-	return arr
+
+	return pixels, nil
 }
 
-func calculateLines() {
-	fmt.Println("Drawing Lines....")
-	error := num.Sub(num.MulByConst(num.Ones(IMG_SIZE_SQ), float64(255)), SourceImage)
+func calculatePinCoords(pins, imgSize int) [][2]float64 {
+	coords := make([][2]float64, pins)
+	center := float64(imgSize) / 2.0
+	radius := float64(imgSize)/2.0 - 0.5
 
-	line_sequence := make([]int, 1, 4096)
-	current_pin := 0
-	last_pins := make([]int, 20, 24)
-	best_pin := -1
-	line_err := float64(0)
-	max_err := float64(0)
-	index := 0
-	inner_index := 0
-	for i := 0; i < MAX_LINES; i++ {
-		best_pin = -1
-		line_err = float64(0)
-		max_err = float64(0)
+	for i := 0; i < pins; i++ {
+		angle := 2.0 * math.Pi * float64(i) / float64(pins)
+		coords[i] = [2]float64{
+			math.Floor(center + radius*math.Cos(angle)),
+			math.Floor(center + radius*math.Sin(angle)),
+		}
+	}
+	return coords
+}
 
-		for offset := MIN_DISTANCE; offset < PINS - MIN_DISTANCE; offset++ {
-			test_pin := (current_pin + offset) % PINS
-			if(contains(last_pins, test_pin)){
-				continue;
-			} else {
-				inner_index = test_pin * PINS + current_pin
+func linspace(a, b float64, n int) []float64 {
+	if n < 2 {
+		if n == 1 {
+			return []float64{a}
+		}
+		return []float64{}
+	}
+	ret := make([]float64, n)
+	nm1 := float64(n - 1)
+	for i := n - 1; i >= 0; i-- {
+		ret[i] = math.Floor((float64(i)*b + (nm1-float64(i))*a) / nm1)
+	}
+	return ret
+}
 
-				line_err = getLineErr(error, Line_cache_y[inner_index], Line_cache_x[inner_index])
-				if( line_err > max_err){
-					max_err = line_err
-					best_pin = test_pin
-					index = inner_index
+func precalculateLines(pins, minDistance int, pinCoords [][2]float64) ([][]float64, [][]float64) {
+	size := pins * pins
+	lineCacheX := make([][]float64, size)
+	lineCacheY := make([][]float64, size)
+
+	for i := 0; i < pins; i++ {
+		for j := i + minDistance; j < pins; j++ {
+			x0 := pinCoords[i][0]
+			y0 := pinCoords[i][1]
+			x1 := pinCoords[j][0]
+			y1 := pinCoords[j][1]
+
+			d := int(math.Floor(math.Sqrt((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0))))
+			xs := linspace(x0, x1, d)
+			ys := linspace(y0, y1, d)
+
+			lineCacheY[j*pins+i] = ys
+			lineCacheY[i*pins+j] = ys
+			lineCacheX[j*pins+i] = xs
+			lineCacheX[i*pins+j] = xs
+		}
+	}
+	return lineCacheX, lineCacheY
+}
+
+func calculateLines(pins, maxLines, lineWeight, minDistance int, sourceImage []float64, lineCacheX, lineCacheY [][]float64) []int {
+	imgSize := workingSize
+	imgSizeSq := imgSize * imgSize
+
+	// error = 255 - sourceImage (how much "darkness" is needed)
+	errorArr := make([]float64, imgSizeSq)
+	for i := 0; i < imgSizeSq; i++ {
+		errorArr[i] = 255.0 - sourceImage[i]
+	}
+
+	lineSequence := make([]int, 1, maxLines+1)
+	lineSequence[0] = 0
+	currentPin := 0
+	lastPins := make([]int, 0, 24)
+
+	for l := 0; l < maxLines; l++ {
+		bestPin := -1
+		maxErr := float64(-1)
+
+		for offset := minDistance; offset < pins-minDistance; offset++ {
+			testPin := (currentPin + offset) % pins
+			if containsInt(lastPins, testPin) {
+				continue
+			}
+
+			idx := testPin*pins + currentPin
+			xs := lineCacheX[idx]
+			ys := lineCacheY[idx]
+			if xs == nil || ys == nil {
+				continue
+			}
+
+			lineErr := getLineErr(errorArr, ys, xs, imgSize)
+			if lineErr > maxErr {
+				maxErr = lineErr
+				bestPin = testPin
+			}
+		}
+
+		if bestPin == -1 {
+			break
+		}
+
+		lineSequence = append(lineSequence, bestPin)
+
+		// Subtract line weight from error array, clamped to [0, 255]
+		idx := bestPin*pins + currentPin
+		xs := lineCacheX[idx]
+		ys := lineCacheY[idx]
+		for i := range xs {
+			py := int(ys[i])
+			px := int(xs[i])
+			if py >= 0 && py < imgSize && px >= 0 && px < imgSize {
+				v := py*imgSize + px
+				errorArr[v] -= float64(lineWeight)
+				if errorArr[v] < 0 {
+					errorArr[v] = 0
+				} else if errorArr[v] > 255 {
+					errorArr[v] = 255
 				}
 			}
 		}
 
-		line_sequence = append(line_sequence, best_pin)
-
-		coords1:=Line_cache_y[index]
-		coords2:=Line_cache_x[index]
-		for i := range coords1 {
-			v := int((coords1[i] * IMG_SIZE_FL) + coords2[i])
-			error[v] = error[v] - LINE_WEIGHT
+		lastPins = append(lastPins, bestPin)
+		if len(lastPins) > 20 {
+			lastPins = lastPins[1:]
 		}
+		currentPin = bestPin
+	}
 
-		last_pins = append(last_pins, best_pin)
-		last_pins = last_pins[1:]
-		current_pin = best_pin
-	}	
-	fmt.Println(line_sequence)
+	return lineSequence
 }
 
-func getLineErr(err, coords1, coords2 []float64) float64 {
-	sum := float64(0)
-	for i:=0;i<len(coords1);i++{
-		sum = sum + err[int((coords1[i] * IMG_SIZE_FL) + coords2[i])]
+func getLineErr(errorArr []float64, coordsY, coordsX []float64, imgSize int) float64 {
+	sum := 0.0
+	for i := 0; i < len(coordsY); i++ {
+		py := int(coordsY[i])
+		px := int(coordsX[i])
+		if py >= 0 && py < imgSize && px >= 0 && px < imgSize {
+			sum += errorArr[py*imgSize+px]
+		}
 	}
 	return sum
 }
 
-func contains(arr []int, num int) bool {
-	for i := range arr {
-		if arr[i] == num {
+func containsInt(arr []int, num int) bool {
+	for _, v := range arr {
+		if v == num {
 			return true
 		}
 	}
 	return false
+}
+
+func init() {
+	image.RegisterFormat("jpeg", "\xff\xd8", jpeg.Decode, jpeg.DecodeConfig)
+	image.RegisterFormat("png", "\x89PNG", png.Decode, png.DecodeConfig)
 }
